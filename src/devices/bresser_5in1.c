@@ -43,25 +43,23 @@ Decoder for Bresser Weather Center 6-in-1.
 {150} 5c e4 18 80 02 c3 18 fb ba fc 26 98 11 84 81 ff f0 16 00  Temp 11.8 C  Hum 81%
 {148} d0 bd 18 80 02 c3 18 f9 ad fa 26 48 ff ff ff fe 02 ff f0
 
-    CHK?8h8h ID?8h8h8h8h8h 8h8h8h WDIR:12h 4h TEMP8h.4h ?4h HUM8h UV?~12h 4h 8h8h
+    DIGEST:8h8h ID?8h8h8h8h FLAGS?8h 8h8h8h WDIR:12h ?4h TEMP8h.4h ?4h HUM8h UV?~12h ?4h 8h8h
 */
 
 #include "decoder.h"
 
-static int bresser_6in1_callback(r_device *decoder, bitbuffer_t *bitbuffer)
+static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 {
     uint8_t const preamble_pattern[] = {0xaa, 0xaa, 0x2d, 0xd4};
 
     data_t *data;
-    uint8_t msg[20];
-    uint16_t sensor_id;
-    unsigned len = 0;
+    uint8_t msg[18];
 
     if (bitbuffer->num_rows != 1
             || bitbuffer->bits_per_row[0] < 160
-            || bitbuffer->bits_per_row[0] > 220) {
+            || bitbuffer->bits_per_row[0] > 230) {
         if (decoder->verbose > 1) {
-            fprintf(stderr, "%s bit_per_row %u out of range\n", __func__, bitbuffer->bits_per_row[0]);
+            fprintf(stderr, "%s: bit_per_row %u out of range\n", __func__, bitbuffer->bits_per_row[0]);
         }
         return DECODE_ABORT_EARLY; // Unrecognized data
     }
@@ -73,28 +71,36 @@ static int bresser_6in1_callback(r_device *decoder, bitbuffer_t *bitbuffer)
         return DECODE_ABORT_LENGTH;
     }
     start_pos += sizeof (preamble_pattern) * 8;
-    len = bitbuffer->bits_per_row[0] - start_pos;
 
-    if (len < 144) {
+    unsigned len = bitbuffer->bits_per_row[0] - start_pos;
+    if (len < sizeof(msg) * 8) {
         if (decoder->verbose > 1) {
             fprintf(stderr, "%s: %u too short\n", __func__, len);
         }
         return DECODE_ABORT_LENGTH; // message too short
     }
-    // truncate any excessive bits
-    len = MIN(len, sizeof (msg) * 8);
 
-    bitbuffer_extract_bytes(bitbuffer, 0, start_pos, msg, len);
+    bitbuffer_extract_bytes(bitbuffer, 0, start_pos, msg, sizeof(msg) * 8);
 
-    bitrow_printf(msg, len, "%s: ", __func__);
+    bitrow_printf(msg, sizeof(msg) * 8, "%s: ", __func__);
 
-    int wind_dir = ((msg[10] & 0xf0) >> 4) * 100 + (msg[10] & 0x0f) * 10 + ((msg[11] & 0xf0) >> 4);
+    // checksum
+    int chksum = add_bytes(&msg[2], 16); // msg[2] to msg[17]
+    if ((chksum & 0xff) != 0xff) {
+        if (decoder->verbose > 1) {
+            fprintf(stderr, "%s: Invalid checksum\n", __func__);
+        }
+        return DECODE_FAIL_MIC;
+    }
+
+    uint32_t id  = ((uint32_t)msg[2] << 24) | (msg[3] << 16) | (msg[4] << 8) | (msg[5]);
 
     int temp_ok = msg[12] != 0xff;
+    // temperature, humidity, only if msg[12] != 0xff
     int temp_raw = ((msg[12] & 0xf0) >> 4) * 100 + (msg[12] & 0x0f) * 10 + ((msg[13] & 0xf0) >> 4);
-    //if (msg[25] & 0x0f)
-    //    temp_raw = -temp_raw;
-    float temperature = temp_raw * 0.1f;
+    float temp_c = temp_raw * 0.1f;
+    if (temp_raw > 600)
+        temp_c = (temp_raw - 1000) * 0.1f;
 
     int humidity_ok = msg[14] != 0xff;
     int humidity = (msg[14] & 0x0f) + ((msg[14] & 0xf0) >> 4) * 10;
@@ -104,19 +110,32 @@ static int bresser_6in1_callback(r_device *decoder, bitbuffer_t *bitbuffer)
     int uv_raw = ((msg[15] & 0xf0) >> 4) * 100 + (msg[15] & 0x0f) * 10 + ((msg[16] & 0xf0) >> 4);
     float uv   = uv_raw * 0.1f;
 
-    int rain_ok  = (msg[16] & 0xf0) == 0xf0;
-    int rain_raw = ((msg[15] & 0xf0) >> 4) * 10 + (msg[15] & 0x0f);
+    int unk_ok  = (msg[16] & 0xf0) == 0xf0;
+    int unk_raw = ((msg[15] & 0xf0) >> 4) * 10 + (msg[15] & 0x0f);
 
-    //    CHK?8h8h ID?8h8h8h8h8h 8h8h8h WDIR:12h 4h TEMP8h.4h ?4h HUM8h UV?~12h 4h 8h8h
+    int wind_dir    = ((msg[10] & 0xf0) >> 4) * 100 + (msg[10] & 0x0f) * 10 + ((msg[11] & 0xf0) >> 4);
+    int gust_raw    = (0xff - (msg[7])) * 10 + (0x0f - ((msg[8] & 0xf0) >> 4));
+    float wind_gust = gust_raw * 0.1f * 3.6;
+    int wind_raw    = (0xff - (msg[9])) * 10 + 0x0f - (msg[8] & 0x0f);
+    float wind_avg  = wind_raw * 0.1f * 3.6;
+
+    // rain, only if msg[12] == 0xff
+    int rain_raw = ((0xff - msg[13]) & 0x0f) * 100
+            + (((0xff - msg[14]) & 0xf0) >> 4) * 10
+            + ((0xff - msg[14]) & 0x0f) * 1;
+    float rain_mm = rain_raw * 0.1f;
 
     /* clang-format off */
     data = data_make(
             "model",            "",             DATA_STRING, "Bresser-6in1",
-            //"id",               "",             DATA_INT,    sensor_id,
-            "temperature_C",    "Temperature",  DATA_COND, temp_ok, DATA_FORMAT, "%.1f C", DATA_DOUBLE, temperature,
+            "id",               "",             DATA_INT,    id,
+            "temperature_C",    "Temperature",  DATA_COND, temp_ok, DATA_FORMAT, "%.1f C", DATA_DOUBLE, temp_c,
             "humidity",         "Humidity",     DATA_COND, humidity_ok, DATA_INT,    humidity,
-            "wind_dir_deg",     "",             DATA_INT,  wind_dir,
-            "rain",             "Rain?",        DATA_COND, rain_ok, DATA_INT,    rain_raw,
+            "wind_max_m_s",     "Wind Gust",    DATA_FORMAT, "%.1f km/h", DATA_DOUBLE, wind_gust,
+            "wind_avg_m_s",     "Wind Speed",   DATA_FORMAT, "%.1f km/h", DATA_DOUBLE, wind_avg,
+            "wind_dir_deg",     "Direction",    DATA_INT,    wind_dir,
+            "rain_mm",          "Rain",         DATA_COND, !temp_ok, DATA_FORMAT, "%.1f mm", DATA_DOUBLE, rain_mm,
+            "unknown",          "Rain?",        DATA_COND, unk_ok, DATA_INT,    unk_raw,
             "uv",               "UV",           DATA_COND, uv_ok, DATA_FORMAT, "%.1f", DATA_DOUBLE,    uv,
             "mic",              "Integrity",    DATA_STRING, "CHECKSUM",
             NULL);
@@ -170,7 +189,7 @@ Packet payload without preamble (203 bits):
 - B = Battery. 0=Ok, 8=Low.
 */
 
-static int bresser_5in1_callback(r_device *decoder, bitbuffer_t *bitbuffer)
+static int bresser_5in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 {
     uint8_t const preamble_pattern[] = {0xaa, 0xaa, 0xaa, 0x2d, 0xd4};
 
@@ -181,8 +200,8 @@ static int bresser_5in1_callback(r_device *decoder, bitbuffer_t *bitbuffer)
 
     if (bitbuffer->num_rows == 1
             && bitbuffer->bits_per_row[0] > 160
-            && bitbuffer->bits_per_row[0] < 220) {
-        return bresser_6in1_callback(decoder, bitbuffer);
+            && bitbuffer->bits_per_row[0] < 230) {
+        return bresser_6in1_decode(decoder, bitbuffer);
     }
 
     if (bitbuffer->num_rows != 1
@@ -222,6 +241,9 @@ static int bresser_5in1_callback(r_device *decoder, bitbuffer_t *bitbuffer)
             return DECODE_FAIL_MIC; // message isn't correct
         }
     }
+
+    // check popcount
+    // uu = checksum (number/count of set bits within bytes 14-25)
 
     sensor_id = msg[14];
 
@@ -287,7 +309,7 @@ r_device bresser_5in1 = {
         .short_width = 124,
         .long_width  = 124,
         .reset_limit = 25000,
-        .decode_fn   = &bresser_5in1_callback,
+        .decode_fn   = &bresser_5in1_decode,
         .disabled    = 0,
         .fields      = output_fields,
 };
