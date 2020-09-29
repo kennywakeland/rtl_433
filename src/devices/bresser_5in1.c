@@ -17,43 +17,30 @@ Decoder for Bresser Weather Center 7-in-1, outdoor sensor.
 
 See https://github.com/merbanan/rtl_433/issues/1492
 
-Also Bresser Explore Scientific SM60020 Soil moisture Sensor.
-https://www.bresser.de/en/Weather-Time/Accessories/EXPLORE-SCIENTIFIC-Soil-Moisture-and-Soil-Temperature-Sensor.html
-
 Preamble:
 
     aa aa aa aa aa 2d d4
 
 Observed length depends on reset_limit.
+The data has a whitening of 0xaa.
 
-Outdoor sensor:
+Data layout:
 
     {271}631d05c09e9a18abaabaaaaaaaaa8adacbacff9cafcaaaaaaa000000000000000000
 
-- Data whitening of 0xaa
-
     DIGEST:8h8h ID?8h8h WDIR:8h4h° 4h 8h WGUST:8h.4h WAVG:8h.4h RAIN:8h8h4h.4h RAIN?:8h TEMP:8h.4hC 4h HUM:8h% LIGHT:8h4h,4hKL ?:8h8h4h TRAILER:8h8h8h4h
-    Unit of light is kLux (not W/m²).
 
-First two bytes are an LFSR-16 digest, generator 0x8810 with some unknown/variable key?
+Unit of light is kLux (not W/m²).
 
-Moisture:
-
-    f16e 187000e34 7 ffffff0000 252 2 16 fff 004 000 [25,2, 99%, CH 7]
-    DIGEST:8h8h ID?8h8h8h8h FLAGS:4h BATT:1b CH:3d 8h 8h8h 8h8h TEMP:12h 4h MOIST:8h TRAILER:8h8h8h8h4h
-
+First two bytes are an LFSR-16 digest, generator 0x8810 key 0xba95 with a final xor 0x6df1, which likely means we got that wrong.
 */
 
 static int bresser_7in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 {
     uint8_t const preamble_pattern[] = {0xaa, 0xaa, 0xaa, 0x2d, 0xd4};
 
-    int const moisture[] = {0, 7, 13, 20, 27, 33, 40, 47, 53, 60, 67, 73, 80, 87, 93, 99}; // scale is 20/3
-
     data_t *data;
     uint8_t msg[25];
-
-    bitbuffer_print(bitbuffer);
 
     if (bitbuffer->num_rows != 1 || bitbuffer->bits_per_row[0] < 240-80) {
         if (decoder->verbose > 1)
@@ -93,10 +80,10 @@ static int bresser_7in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     int chk    = (msg[0] << 8) | msg[1];
     int digest = lfsr_digest16(&msg[2], 23, 0x8810, 0xba95);
     if ((chk ^ digest) != 0x6df1) {
-        //if (decoder->verbose > 1) {
+        if (decoder->verbose > 1) {
             fprintf(stderr, "%s: Digest check failed %04x vs %04x (%04x)\n", __func__, chk, digest, chk ^ digest);
-        //}
-        //return DECODE_FAIL_MIC;
+        }
+        return DECODE_FAIL_MIC;
     }
 
     int id       = (msg[2] << 8) | (msg[3]);
@@ -138,6 +125,17 @@ static int bresser_7in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 Decoder for Bresser Weather Center 6-in-1.
 
 Also Bresser Weather Center 7-in-1 indoor sensor.
+Also Bresser new 5-in-1 sensors.
+
+Also Bresser Explore Scientific SM60020 Soil moisture Sensor.
+https://www.bresser.de/en/Weather-Time/Accessories/EXPLORE-SCIENTIFIC-Soil-Moisture-and-Soil-Temperature-Sensor.html
+
+Moisture:
+
+    f16e 187000e34 7 ffffff0000 252 2 16 fff 004 000 [25,2, 99%, CH 7]
+    DIGEST:8h8h ID?8h8h8h8h FLAGS:4h BATT:1b CH:3d 8h 8h8h 8h8h TEMP:12h 4h MOIST:8h TRAILER:8h8h8h8h4h
+
+Moisture is transmitted in the humidity field as index 1-16: 0, 7, 13, 20, 27, 33, 40, 47, 53, 60, 67, 73, 80, 87, 93, 99.
 
 {206}55555555545ba83e803100058631ff11fe6611ffffffff01cc00 [Hum 96% Temp 3.8 C Wind 0.7 m/s]
 {205}55555555545ba999263100058631fffffe66d006092bffe0cff8 [Hum 95% Temp 3.0 C Wind 0.0 m/s]
@@ -159,14 +157,14 @@ Also Bresser Weather Center 7-in-1 indoor sensor.
 2dd4  c5 f4 18 80 02 c3 18 ff ff ff 30 98 02 84 94 ff f0 bc 00 [Hum 95% Temp 2.8 C Wind 0.8 m/s]
 
 
-{147} 5e aa 18 80 02 c3 18 fa 8f fb 27 68 11 84 81 ff f0 72 00  Temp 11.8 C  Hum 81%
+{147} 5e aa 18 80 02 c3 18 fa 8f fb 27 68 11 84 81 ff f0 72 00 [Temp 11.8 C  Hum 81%]
 {149} ae d1 18 80 02 c3 18 fa 8d fb 26 78 ff ff ff fe 02 db f0
-{150} f8 2e 18 80 02 c3 18 fc c6 fd 26 38 11 84 81 ff f0 68 00  Temp 11.8 C  Hum 81%
+{150} f8 2e 18 80 02 c3 18 fc c6 fd 26 38 11 84 81 ff f0 68 00 [Temp 11.8 C  Hum 81%]
 {149} c4 7d 18 80 02 c3 18 fc 78 fd 29 28 ff ff ff fe 03 97 f0
 {149} 28 1e 18 80 02 c3 18 fb b7 fc 26 58 ff ff ff fe 02 c3 f0
-{150} 21 e8 18 80 02 c3 18 fb 9c fc 33 08 11 84 81 ff f0 b7 f8  Temp 11.8 C  Hum 81%
+{150} 21 e8 18 80 02 c3 18 fb 9c fc 33 08 11 84 81 ff f0 b7 f8 [Temp 11.8 C  Hum 81%]
 {149} 83 ae 18 80 02 c3 18 fc 78 fc 29 28 ff ff ff fe 03 98 00
-{150} 5c e4 18 80 02 c3 18 fb ba fc 26 98 11 84 81 ff f0 16 00  Temp 11.8 C  Hum 81%
+{150} 5c e4 18 80 02 c3 18 fb ba fc 26 98 11 84 81 ff f0 16 00 [Temp 11.8 C  Hum 81%]
 {148} d0 bd 18 80 02 c3 18 f9 ad fa 26 48 ff ff ff fe 02 ff f0
 
     DIGEST:8h8h ID?8h8h8h8h FLAGS:4h BATT:1b CH:3d WSPEED:~8h~4h ~4h~8h WDIR:12h ?4h TEMP8h.4h ?4h HUM8h UV?~12h ?4h CHKSUM:8h
@@ -178,6 +176,8 @@ Checksum is 8-bit add (with carry) to 0xff.
 static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 {
     uint8_t const preamble_pattern[] = {0xaa, 0xaa, 0x2d, 0xd4};
+
+    int const moisture_map[] = {0, 7, 13, 20, 27, 33, 40, 47, 53, 60, 67, 73, 80, 87, 93, 99}; // scale is 20/3
 
     data_t *data;
     uint8_t msg[18];
@@ -230,6 +230,11 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
         return DECODE_FAIL_MIC;
     }
 
+    //int type     = (msg[2] << 8) | (msg[3]);
+    //int sub_id   = (msg[4] << 8) | (msg[5]);
+    fprintf(stderr, "\nPlease report your exact sensor model and this ID \"%02x%02x %02x%02x %02x\"\nat https://github.com/merbanan/rtl_433/pull/1214\n",
+            msg[2], msg[3], msg[4], msg[5], msg[6]);
+
     uint32_t id  = ((uint32_t)msg[2] << 24) | (msg[3] << 16) | (msg[4] << 8) | (msg[5]);
     int flags    = (msg[6] >> 4);
     int batt     = (msg[6] >> 3) & 1;
@@ -242,7 +247,6 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     if (temp_raw > 600)
         temp_c = (temp_raw - 1000) * 0.1f;
 
-    int humidity_ok = msg[14] != 0xff;
     int humidity    = (msg[14] >> 4) * 10 + (msg[14] & 0x0f);
 
     //int uv_ok = (msg[16] & 0x0f) == 0;
@@ -260,10 +264,8 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     int wind_ok = (msg[7] <= 0x99) && (msg[8] <= 0x99) && (msg[9] <= 0x99);
 
     int gust_raw    = (msg[7] >> 4) * 100 + (msg[7] & 0x0f) * 10 + (msg[8] >> 4);
-    fprintf(stderr, "Gust %d %d %d %d\n", (msg[7] >> 4), (msg[7] & 0x0f), (msg[8] >> 4), gust_raw);
     float wind_gust = gust_raw * 0.1f;
     int wavg_raw    = (msg[9] >> 4) * 100 + (msg[9] & 0x0f) * 10 + (msg[8] & 0x0f);
-    fprintf(stderr, "Avg  %d %d %d %d\n", (msg[9] >> 4), (msg[9] & 0x0f), (msg[8] & 0x0f), wavg_raw);
     float wind_avg  = wavg_raw * 0.1f;
     int wind_dir    = ((msg[10] & 0xf0) >> 4) * 100 + (msg[10] & 0x0f) * 10 + ((msg[11] & 0xf0) >> 4);
 
@@ -274,14 +276,19 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     int rain_raw  = (msg[13] >> 4) * 1000 + (msg[13] & 0x0f) * 100 + (msg[14] >> 4) * 10 + (msg[14] & 0x0f);
     float rain_mm = rain_raw * 0.1f;
 
+    int moisture = -1;
+    if (flags == 4 && temp_ok && humidity >= 1 && humidity <= 16)
+        moisture = moisture_map[humidity - 1];
+
     /* clang-format off */
     data = data_make(
             "model",            "",             DATA_STRING, "Bresser-6in1",
-            "id",               "",             DATA_INT,    id,
+            "id",               "",             DATA_FORMAT, "%08x", DATA_INT,    id,
             "channel",          "",             DATA_INT,    chan,
             "battery_ok",       "Battery",      DATA_INT,    !batt,
             "temperature_C",    "Temperature",  DATA_COND, temp_ok, DATA_FORMAT, "%.1f C", DATA_DOUBLE, temp_c,
-            "humidity",         "Humidity",     DATA_COND, humidity_ok, DATA_INT,    humidity,
+            "humidity",         "Humidity",     DATA_COND, temp_ok, DATA_INT,    humidity,
+            "moisture",         "Moisture",     DATA_COND, moisture >= 0, DATA_INT,    moisture,
             "wind_max_m_s",     "Wind Gust",    DATA_COND, wind_ok, DATA_FORMAT, "%.1f m/s", DATA_DOUBLE, wind_gust,
             "wind_avg_m_s",     "Wind Speed",   DATA_COND, wind_ok, DATA_FORMAT, "%.1f m/s", DATA_DOUBLE, wind_avg,
             "wind_dir_deg",     "Direction",    DATA_COND, wind_ok, DATA_INT,    wind_dir,
