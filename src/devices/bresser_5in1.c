@@ -90,7 +90,7 @@ static int bresser_7in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     int wdir     = (msg[4] >> 4) * 100 + (msg[4] & 0x0f) * 10 + (msg[5] >> 4);
     int wgst_raw = (msg[7] >> 4) * 100 + (msg[7] & 0x0f) * 10 + (msg[8] >> 4);
     int wavg_raw = (msg[8] & 0x0f) * 100 + (msg[9] >> 4) * 10 + (msg[9] & 0x0f);
-    int rain_raw = (msg[10] >> 4) * 100000 + (msg[10] & 0x0f) * 10000 + (msg[11] >> 4) * 1000;
+    int rain_raw = (msg[10] >> 4) * 100000 + (msg[10] & 0x0f) * 10000 + (msg[11] >> 4) * 1000
             + (msg[11] & 0x0f) * 100 + (msg[12] >> 4) * 10 + (msg[12] & 0x0f) * 1; // 6 digits
     float rain_mm = rain_raw * 0.1f;
     int temp_raw = (msg[14] >> 4) * 100 + (msg[14] & 0x0f) * 10 + (msg[15] >> 4);
@@ -171,6 +171,16 @@ Moisture is transmitted in the humidity field as index 1-16: 0, 7, 13, 20, 27, 3
 
 Digest is LFSR-16 gen 0x8810 key 0x5412, excluding the add-checksum and trailer.
 Checksum is 8-bit add (with carry) to 0xff.
+
+Notes on different sensors:
+
+- 1910 084d 18 : @RebeckaJohansson, VENTUS W835
+- 2030 088d 10 : @mvdgrift, Wi-Fi Colour Weather Station with 5in1 Sensor, Art.No.: 7002580, ff 01 in the UV field is (obviously) invalid.
+- 1970 0d57 18 : @danrhjones, bresser 5-in-1 model 7002580, no UV
+
+- 18c0 0f10 18 : @rege245 BRESSER-PC-Weather-station-with-6-in-1-outdoor-sensor
+- 1880 02c3 18 : @f4gqk 6-in-1
+- 18b0 0887 18 : @npkap
 */
 
 static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
@@ -249,8 +259,9 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
 
     int humidity    = (msg[14] >> 4) * 10 + (msg[14] & 0x0f);
 
+    // apparently ff01 if not available
     //int uv_ok = (msg[16] & 0x0f) == 0;
-    int uv_ok  = (msg[16] & 0xf0) != 0xf0;
+    int uv_ok  = msg[15] <= 0x99 && (msg[16] & 0xf0) <= 0x90;
     int uv_raw = ((msg[15] & 0xf0) >> 4) * 100 + (msg[15] & 0x0f) * 10 + ((msg[16] & 0xf0) >> 4);
     float uv   = uv_raw * 0.1f;
 
