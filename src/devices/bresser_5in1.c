@@ -126,6 +126,7 @@ Decoder for Bresser Weather Center 6-in-1.
 
 Also Bresser Weather Center 7-in-1 indoor sensor.
 Also Bresser new 5-in-1 sensors.
+Also Froggit WH6000 sensors.
 
 Also Bresser Explore Scientific SM60020 Soil moisture Sensor.
 https://www.bresser.de/en/Weather-Time/Accessories/EXPLORE-SCIENTIFIC-Soil-Moisture-and-Soil-Temperature-Sensor.html
@@ -177,7 +178,7 @@ Notes on different sensors:
 - 1910 084d 18 : @RebeckaJohansson, VENTUS W835
 - 2030 088d 10 : @mvdgrift, Wi-Fi Colour Weather Station with 5in1 Sensor, Art.No.: 7002580, ff 01 in the UV field is (obviously) invalid.
 - 1970 0d57 18 : @danrhjones, bresser 5-in-1 model 7002580, no UV
-
+- 18b0 0301 18 : @konserninjohtaja 6-in-1 outdoor sensor
 - 18c0 0f10 18 : @rege245 BRESSER-PC-Weather-station-with-6-in-1-outdoor-sensor
 - 1880 02c3 18 : @f4gqk 6-in-1
 - 18b0 0887 18 : @npkap
@@ -240,13 +241,8 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
         return DECODE_FAIL_MIC;
     }
 
-    //int type     = (msg[2] << 8) | (msg[3]);
-    //int sub_id   = (msg[4] << 8) | (msg[5]);
-    fprintf(stderr, "\nPlease report your exact sensor model and this ID \"%02x%02x %02x%02x %02x\"\nat https://github.com/merbanan/rtl_433/pull/1214\n",
-            msg[2], msg[3], msg[4], msg[5], msg[6]);
-
     uint32_t id  = ((uint32_t)msg[2] << 24) | (msg[3] << 16) | (msg[4] << 8) | (msg[5]);
-    int flags    = (msg[6] >> 4);
+    int kind     = (msg[6] >> 4);
     int batt     = (msg[6] >> 3) & 1;
     int chan     = (msg[6] & 0x7);
 
@@ -288,7 +284,7 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
     float rain_mm = rain_raw * 0.1f;
 
     int moisture = -1;
-    if (flags == 4 && temp_ok && humidity >= 1 && humidity <= 16)
+    if (kind == 4 && temp_ok && humidity >= 1 && humidity <= 16)
         moisture = moisture_map[humidity - 1];
 
     /* clang-format off */
@@ -296,9 +292,10 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             "model",            "",             DATA_STRING, "Bresser-6in1",
             "id",               "",             DATA_FORMAT, "%08x", DATA_INT,    id,
             "channel",          "",             DATA_INT,    chan,
-            "battery_ok",       "Battery",      DATA_INT,    !batt,
+            "battery_ok",       "Battery OK",   DATA_INT,    batt,
             "temperature_C",    "Temperature",  DATA_COND, temp_ok, DATA_FORMAT, "%.1f C", DATA_DOUBLE, temp_c,
             "humidity",         "Humidity",     DATA_COND, temp_ok, DATA_INT,    humidity,
+            "kind",             "kind",         DATA_INT,    kind,
             "moisture",         "Moisture",     DATA_COND, moisture >= 0, DATA_INT,    moisture,
             "wind_max_m_s",     "Wind Gust",    DATA_COND, wind_ok, DATA_FORMAT, "%.1f m/s", DATA_DOUBLE, wind_gust,
             "wind_avg_m_s",     "Wind Speed",   DATA_COND, wind_ok, DATA_FORMAT, "%.1f m/s", DATA_DOUBLE, wind_avg,
@@ -306,7 +303,6 @@ static int bresser_6in1_decode(r_device *decoder, bitbuffer_t *bitbuffer)
             "rain_mm",          "Rain",         DATA_COND, !temp_ok, DATA_FORMAT, "%.1f mm", DATA_DOUBLE, rain_mm,
             "unknown",          "Unknown",      DATA_COND, unk_ok, DATA_INT,    unk_raw,
             "uv",               "UV",           DATA_COND, uv_ok, DATA_FORMAT, "%.1f", DATA_DOUBLE,    uv,
-            "flags",            "Flags",        DATA_INT,    flags,
             "mic",              "Integrity",    DATA_STRING, "CRC",
             NULL);
     /* clang-format on */
@@ -465,12 +461,14 @@ static char *output_fields[] = {
         "battery",
         "temperature_C",
         "humidity",
+        "kind",
         "wind_gust",  // TODO: delete this
         "wind_speed", // TODO: delete this
         "wind_max_m_s",
         "wind_avg_m_s",
         "wind_dir_deg",
         "rain_mm",
+        "light_klx",
         "uv",
         "mic",
         NULL,
